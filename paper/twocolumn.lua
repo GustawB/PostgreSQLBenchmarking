@@ -4,6 +4,7 @@
 -- * Paragraph made only of images + following "**Figure N.** caption" paragraph
 --   -> figure* with the images side by side.
 -- * Single-image figure -> column-width figure.
+-- * Citation numbers like [4] or [6, 7] -> links to the reference entries.
 -- * Multi-line author list -> single author block separated by line breaks.
 
 local function latex(inlines)
@@ -78,7 +79,45 @@ local function render_figure(imgs, caption)
     '\\caption{' .. latex(caption) .. '}', '\\end{figure*}' }, '\n'))
 end
 
+-- Turns "[4]" / "[6," "7]" citation tokens into links to the matching reference.
+local function link_citations(inlines)
+  local out, open = pandoc.List(), false
+  for _, el in ipairs(inlines) do
+    local bracket, num, rest
+    if el.t == 'Str' then
+      bracket, num, rest = el.text:match('^(%[)(%d+)([,%]].*)$')
+      if not bracket and open then num, rest = el.text:match('^(%d+)([,%]].*)$') end
+    end
+    if num then
+      if bracket then out:insert(pandoc.Str('[')) end
+      out:insert(pandoc.Link({ pandoc.Str(num) }, '#ref-' .. num))
+      out:insert(pandoc.Str(rest))
+      open = rest:sub(1, 1) == ','
+    else
+      out:insert(el)
+      if el.t ~= 'Space' then open = false end
+    end
+  end
+  return out
+end
+
+-- Anchors "[n] ..." reference entries and links citations everywhere before them.
+local function add_citation_links(blocks)
+  local in_refs = false
+  for i, b in ipairs(blocks) do
+    if b.t == 'Header' then
+      in_refs = pandoc.utils.stringify(b) == 'References'
+    elseif in_refs and b.t == 'Para' then
+      local num = b.content[1] and b.content[1].t == 'Str' and b.content[1].text:match('^%[(%d+)%]$')
+      if num then b.content[1] = pandoc.Span({ b.content[1] }, { id = 'ref-' .. num }) end
+    else
+      blocks[i] = b:walk({ Inlines = link_citations })
+    end
+  end
+end
+
 function Pandoc(doc)
+  add_citation_links(doc.blocks)
   local blocks, out, i = doc.blocks, pandoc.List(), 1
   while i <= #blocks do
     local b, nxt = blocks[i], blocks[i + 1]
